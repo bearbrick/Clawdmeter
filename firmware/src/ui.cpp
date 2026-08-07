@@ -316,7 +316,13 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 // "Resets in" is shortened to "Resets" to keep the line inside the panel at the
 // 28px reset font; the separator is ASCII because the bundled font subsets carry
 // no punctuation beyond it.
-static void format_split_reset(int mins, float weekly_pct, char* buf, size_t len) {
+// window_mins names the headline window so a provider reporting only a weekly
+// limit (some Codex plans) doesn't render as if it were a 5-hour one.
+// has_weekly is false when there is no second window to fold in.
+#define WINDOW_WEEKLY_MINS 10080
+
+static void format_split_reset(int mins, int window_mins, bool has_weekly,
+                               float weekly_pct, char* buf, size_t len) {
     char t[16];
     if (mins < 0) {
         snprintf(t, sizeof(t), "---");
@@ -327,7 +333,12 @@ static void format_split_reset(int mins, float weekly_pct, char* buf, size_t len
     } else {
         snprintf(t, sizeof(t), "%dd %dh", mins / 1440, (mins % 1440) / 60);
     }
-    snprintf(buf, len, "Resets %s - Week %d%%", t, (int)(weekly_pct + 0.5f));
+    const char* head = (window_mins >= WINDOW_WEEKLY_MINS) ? "Week resets" : "Resets";
+    if (has_weekly) {
+        snprintf(buf, len, "%s %s - Week %d%%", head, t, (int)(weekly_pct + 0.5f));
+    } else {
+        snprintf(buf, len, "%s %s", head, t);
+    }
 }
 
 // Forward decls — callbacks defined near ui_show_screen below
@@ -656,8 +667,9 @@ void ui_update(const UsageData* data) {
     } else {
         lv_label_set_text_fmt(lbl_session_pct, "%d%%", s_pct);
         if (split) {
-            format_split_reset(data->session_reset_mins, data->weekly_pct,
-                               buf, sizeof(buf));
+            // Claude always reports both windows: 5h headline, weekly folded in.
+            format_split_reset(data->session_reset_mins, 300, true,
+                               data->weekly_pct, buf, sizeof(buf));
         } else {
             format_reset_time(data->session_reset_mins, buf, sizeof(buf));
         }
@@ -687,7 +699,8 @@ void ui_update(const UsageData* data) {
         lv_bar_set_value(bar_weekly, c_pct, LV_ANIM_ON);
         lv_obj_set_style_bg_color(bar_weekly, pct_color(data->codex_session_pct),
                                   LV_PART_INDICATOR);
-        format_split_reset(data->codex_session_reset_mins, data->codex_weekly_pct,
+        format_split_reset(data->codex_session_reset_mins, data->codex_window_mins,
+                           data->codex_has_weekly, data->codex_weekly_pct,
                            buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     } else {

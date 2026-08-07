@@ -127,6 +127,9 @@ static bool parse_json(const char* json, UsageData* out) {
     out->codex_valid = !doc["xs"].isNull();
     out->codex_session_pct = doc["xs"] | 0.0f;
     out->codex_session_reset_mins = doc["xsr"] | -1;
+    out->codex_window_mins = doc["xwin"] | 300;
+    // Absent "xw" means Codex reported a single window, not a zeroed one.
+    out->codex_has_weekly = !doc["xw"].isNull();
     out->codex_weekly_pct = doc["xw"] | 0.0f;
     out->codex_weekly_reset_mins = doc["xwr"] | -1;
 

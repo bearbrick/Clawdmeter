@@ -21,9 +21,16 @@ struct UsageData {
     // of the Codex CLI's local session rollouts. codex_valid is false on a
     // Claude-only host (the daemon omits the keys), which keeps the original
     // Current/Weekly view; true splits the screen into Claude + Codex panels.
-    float codex_session_pct;       // 5h window utilization 0-100
+    // How many windows Codex reports varies by plan: some expose a 5h window
+    // plus a weekly one, others only the weekly. codex_session_* is whichever
+    // is the shortest (the one that bites first) and codex_window_mins names
+    // its length so the display can label it; the weekly line is drawn only
+    // when codex_has_weekly says a second window exists.
+    float codex_session_pct;       // headline window utilization 0-100
     int   codex_session_reset_mins;
-    float codex_weekly_pct;        // 7d window utilization 0-100
+    int   codex_window_mins;       // headline window length (300 = 5h, 10080 = weekly)
+    float codex_weekly_pct;        // secondary window utilization 0-100
     int   codex_weekly_reset_mins;
+    bool  codex_has_weekly;        // false when Codex reports one window only
     bool  codex_valid;
 };

@@ -160,6 +160,48 @@ def test_read_prefers_newest_day(tmp_path):
     assert read_codex_usage(tmp_path)["xs"] == 55
 
 
+def test_weekly_only_plan_is_the_headline(tmp_path):
+    """Codex 0.147 on ChatGPT Plus: one weekly window in `primary`, secondary null.
+
+    The weekly window has to become the headline number — treating a missing 5h
+    window as "no data" is what made this shape read as None.
+    """
+    rl = _rate_limits()
+    rl["primary"] = {"used_percent": 15.0, "window_minutes": 10080,
+                     "resets_at": time.time() + 600000}
+    rl["secondary"] = None
+    _write_rollout(tmp_path, events=[_event(rl)])
+    out = read_codex_usage(tmp_path)
+    assert out["xs"] == 15
+    assert out["xwin"] == 10080        # display labels it "Week resets"
+    assert "xw" not in out             # no second window to fold in
+    assert out["xacct"] == "plus"
+
+
+def test_five_hour_only_plan_is_the_headline(tmp_path):
+    rl = _rate_limits()
+    rl["secondary"] = None
+    _write_rollout(tmp_path, events=[_event(rl)])
+    out = read_codex_usage(tmp_path)
+    assert out["xs"] == 14 and out["xwin"] == 300
+    assert "xw" not in out
+
+
+def test_five_hour_wins_headline_when_both_present(tmp_path):
+    """The shortest window bites first, so it gets the big number."""
+    _write_rollout(tmp_path, events=[_event(_rate_limits(14.0, 2.0))])
+    out = read_codex_usage(tmp_path)
+    assert out["xs"] == 14 and out["xwin"] == 300
+    assert out["xw"] == 2
+
+
+def test_both_windows_null_returns_none(tmp_path):
+    rl = _rate_limits()
+    rl["primary"] = rl["secondary"] = None
+    _write_rollout(tmp_path, events=[_event(rl)])
+    assert read_codex_usage(tmp_path) is None
+
+
 def test_read_without_codex_returns_none(tmp_path):
     """No ~/.codex at all — caller omits the keys and the device stays single-provider."""
     assert read_codex_usage(tmp_path) is None

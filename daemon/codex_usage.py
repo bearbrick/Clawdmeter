@@ -163,37 +163,60 @@ def read_codex_usage(home: Path | None = None) -> dict | None:
         rl = _rate_limits_from_tail(path)
         if not rl:
             continue
-
-        windows = [rl.get("primary"), rl.get("secondary")]
-        five_hour = weekly = None
-        for w in windows:
-            if not isinstance(w, dict):
-                continue
-            parsed = _window(w, now)
-            if parsed is None:
-                continue
-            if w.get("window_minutes") == WEEKLY_MIN:
-                weekly = parsed
-            elif w.get("window_minutes") == FIVE_HOUR_MIN:
-                five_hour = parsed
-        # Fall back to positional order when window_minutes is missing or has
-        # moved to lengths we don't recognize.
-        if five_hour is None and weekly is None:
-            five_hour = _window(rl.get("primary"), now)
-            weekly = _window(rl.get("secondary"), now)
-        if five_hour is None:
-            continue
-
-        out = {"xs": five_hour[0], "xsr": five_hour[1]}
-        if weekly is not None:
-            out["xw"], out["xwr"] = weekly
-        else:
-            out["xw"], out["xwr"] = 0, 0
-        plan = rl.get("plan_type")
-        if isinstance(plan, str) and plan:
-            out["xacct"] = plan
-        return out
+        out = _map_windows(rl, now)
+        if out:
+            return out
     return None
+
+
+def _map_windows(rl: dict, now: float) -> dict | None:
+    """Map one rate_limits object onto payload fields, or None if unusable.
+
+    How many windows Codex reports, and which slot each lands in, varies by plan
+    and CLI version. A ChatGPT Plus account on Codex 0.147 exposes a single
+    weekly limit sitting in ``primary`` with ``secondary`` null; other setups
+    report a 5-hour window in ``primary`` and the weekly one in ``secondary``.
+    So slots carry no meaning — windows are identified by ``window_minutes``,
+    and one window is a perfectly valid answer.
+
+    The headline (``xs``) is the shortest window present, since that is the one
+    that bites first, with ``xwin`` naming its length so the display can label
+    it. A second window rides along in ``xw`` only when there actually is one.
+    """
+    ordered: list[tuple[object, tuple[int, int]]] = []
+    by_len: dict[int, tuple[int, int]] = {}
+    for slot in ("primary", "secondary"):
+        w = rl.get(slot)
+        parsed = _window(w, now)
+        if parsed is None:
+            continue  # absent, null, or malformed — simply not reported
+        length = w.get("window_minutes")
+        ordered.append((length, parsed))
+        if isinstance(length, int):
+            by_len[length] = parsed
+
+    if not ordered:
+        return None
+
+    five, week = by_len.get(FIVE_HOUR_MIN), by_len.get(WEEKLY_MIN)
+    if five is not None:
+        headline_len, headline, secondary = FIVE_HOUR_MIN, five, week
+    elif week is not None:
+        headline_len, headline, secondary = WEEKLY_MIN, week, None
+    else:
+        # Window lengths we don't recognize: fall back to the order reported.
+        headline_len, headline = ordered[0]
+        secondary = ordered[1][1] if len(ordered) > 1 else None
+
+    out = {"xs": headline[0], "xsr": headline[1]}
+    if isinstance(headline_len, int):
+        out["xwin"] = headline_len
+    if secondary is not None:
+        out["xw"], out["xwr"] = secondary
+    plan = rl.get("plan_type")
+    if isinstance(plan, str) and plan:
+        out["xacct"] = plan
+    return out
 
 
 def _recent_rollouts(sessions: Path) -> list[Path]:
