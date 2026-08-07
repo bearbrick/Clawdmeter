@@ -227,6 +227,37 @@ JSON payload format (written to RX):
 
 Fields: `s` = session %, `sr` = session reset (minutes), `w` = weekly %, `wr` = weekly reset (minutes), `st` = status, `ok` = success flag.
 
+Optional blocks are omitted rather than zeroed, so an older daemon and a newer one are both understood: `c` (chime), `t`/`tf` (clock), `tp`/`pd`/`rd` (Enterprise), and the Codex block below.
+
+## Codex support
+
+The Usage screen splits into a **Claude** panel and a **Codex** panel whenever the host has Codex usage to report. Each panel shows that provider's 5-hour window as the big number and bar, with its weekly window folded into the line underneath.
+
+Codex costs no API call at all. The Codex CLI already records a rate-limit snapshot in its own session rollouts, so the daemon reads the newest one back:
+
+```text
+~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
+  → "rate_limits": {"primary": {...300 min...}, "secondary": {...10080 min...}}
+```
+
+`primary` (5h) and `secondary` (weekly) map onto the same two windows Anthropic reports, which is why both providers share one payload and one screen layout.
+
+| | |
+| --- | --- |
+| **Requires** | Codex CLI signed in to a ChatGPT subscription. An API-key setup is billed per token and has no window to report. |
+| **Network** | None. No OpenAI credentials are read and no quota is spent. |
+| **Rollouts older than their reset** | Reported as 0%, not as the stale number — the window has rolled over. |
+| **Turn it off** | `codex = off` in the config file. Default is `auto`. |
+| **Enterprise Claude accounts** | Keep the existing Spending/Period pair; there is no third panel to give Codex. |
+
+Payload block (merged into the same RX write, `x` = Codex):
+
+```json
+{ "xs": 14, "xsr": 60, "xw": 2, "xwr": 9000, "xacct": "plus" }
+```
+
+Supported by the macOS and Windows daemons. The Linux bash daemon is Claude-only.
+
 ## Recompiling fonts
 
 The `firmware/src/font_*.c` files are pre-compiled LVGL bitmap fonts.

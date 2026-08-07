@@ -16,4 +16,14 @@ struct UsageData {
     int  clock_fmt;          // 12 or 24 (hour format from daemon); defaults to 24
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
+
+    // Codex (OpenAI) usage — same two windows, read by the daemon straight out
+    // of the Codex CLI's local session rollouts. codex_valid is false on a
+    // Claude-only host (the daemon omits the keys), which keeps the original
+    // Current/Weekly view; true splits the screen into Claude + Codex panels.
+    float codex_session_pct;       // 5h window utilization 0-100
+    int   codex_session_reset_mins;
+    float codex_weekly_pct;        // 7d window utilization 0-100
+    int   codex_weekly_reset_mins;
+    bool  codex_valid;
 };

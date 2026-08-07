@@ -117,6 +117,9 @@ def test_poll_active_payload_picks_active_and_skips_tokenless(monkeypatch):
     dirs = [A, B]
     monkeypatch.setattr(mod, "read_config_dirs", lambda: dirs)
     monkeypatch.setattr(mod, "read_token_for", lambda d: {A: "tA", B: None}[d])  # B has no token
+    # poll_active merges Codex from the real ~/.codex; pin it off so this test
+    # asserts plan selection alone. Codex merging has its own tests below.
+    monkeypatch.setattr(mod, "read_codex_usage", lambda: None)
 
     async def fake_poll(token):
         return {"s": 25, "ok": True} if token == "tA" else None
@@ -125,6 +128,50 @@ def test_poll_active_payload_picks_active_and_skips_tokenless(monkeypatch):
     with patch.object(mod, "poll_api", new=AsyncMock(side_effect=fake_poll)):
         payload = _run(mod.poll_active_payload(sel))
     assert payload == {"s": 25, "ok": True}  # only A had a token
+
+
+# ---------------------------------------------------------------------------
+# Codex merge — the "x*" block riding along on the active plan's payload
+# ---------------------------------------------------------------------------
+
+def _poll_once(monkeypatch, claude=None):
+    """Run one poll cycle against a single dir with a stubbed Claude payload."""
+    monkeypatch.setattr(mod, "read_config_dirs", lambda: [A])
+    monkeypatch.setattr(mod, "read_token_for", lambda d: "tA")
+    with patch.object(mod, "poll_api",
+                      new=AsyncMock(return_value=claude or {"s": 25, "ok": True})):
+        return _run(mod.poll_active_payload(PlanSelector()))
+
+
+def test_codex_fields_ride_along_on_active_payload(monkeypatch):
+    monkeypatch.setattr(mod, "read_codex_setting", lambda: "auto")
+    monkeypatch.setattr(mod, "read_codex_usage",
+                        lambda: {"xs": 14, "xsr": 60, "xw": 2, "xwr": 9000, "xacct": "plus"})
+    payload = _poll_once(monkeypatch)
+    assert payload["s"] == 25 and payload["xs"] == 14 and payload["xacct"] == "plus"
+
+
+def test_no_codex_keys_when_nothing_to_report(monkeypatch):
+    """A Claude-only host must send the original payload untouched."""
+    monkeypatch.setattr(mod, "read_codex_setting", lambda: "auto")
+    monkeypatch.setattr(mod, "read_codex_usage", lambda: None)
+    assert _poll_once(monkeypatch) == {"s": 25, "ok": True}
+
+
+def test_codex_off_suppresses_the_block(monkeypatch):
+    monkeypatch.setattr(mod, "read_codex_setting", lambda: "off")
+    monkeypatch.setattr(mod, "read_codex_usage", lambda: {"xs": 14})
+    assert _poll_once(monkeypatch) == {"s": 25, "ok": True}
+
+
+def test_codex_read_failure_does_not_break_claude(monkeypatch):
+    """A malformed rollout must cost the Codex panel, never the Claude reading."""
+    def boom():
+        raise ValueError("corrupt rollout")
+
+    monkeypatch.setattr(mod, "read_codex_setting", lambda: "auto")
+    monkeypatch.setattr(mod, "read_codex_usage", boom)
+    assert _poll_once(monkeypatch) == {"s": 25, "ok": True}
 
 
 def test_poll_active_payload_returns_none_when_all_fail(monkeypatch):

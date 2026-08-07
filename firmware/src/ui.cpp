@@ -310,6 +310,26 @@ static void format_reset_time(int mins, char* buf, size_t len) {
     }
 }
 
+// Reset line for the split (Claude + Codex) view. Two providers share the space
+// one provider's two windows used to have, so the weekly window gives up its own
+// panel and folds in here as secondary text behind the 5-hour countdown.
+// "Resets in" is shortened to "Resets" to keep the line inside the panel at the
+// 28px reset font; the separator is ASCII because the bundled font subsets carry
+// no punctuation beyond it.
+static void format_split_reset(int mins, float weekly_pct, char* buf, size_t len) {
+    char t[16];
+    if (mins < 0) {
+        snprintf(t, sizeof(t), "---");
+    } else if (mins < 60) {
+        snprintf(t, sizeof(t), "%dm", mins);
+    } else if (mins < 1440) {
+        snprintf(t, sizeof(t), "%dh %dm", mins / 60, mins % 60);
+    } else {
+        snprintf(t, sizeof(t), "%dd %dh", mins / 1440, (mins % 1440) / 60);
+    }
+    snprintf(buf, len, "Resets %s - Week %d%%", t, (int)(weekly_pct + 0.5f));
+}
+
 // Forward decls — callbacks defined near ui_show_screen below
 static void global_click_cb(lv_event_t* e);
 
@@ -593,6 +613,11 @@ void ui_update(const UsageData* data) {
 
     int s_pct = (int)(data->session_pct + 0.5f);
 
+    // Split view: the second panel becomes Codex instead of Claude's weekly
+    // window. Enterprise keeps priority — its Spending/Period pair already uses
+    // both panels for one account, and there is no third panel to give Codex.
+    bool split = data->codex_valid && !data->enterprise;
+
     if (data->enterprise) {
         // Spending box: big number-only label + small "%" symbol + desc + pace
         lv_obj_set_style_text_font(lbl_session_pct, L.ent_pct_font, 0);
@@ -604,7 +629,7 @@ void ui_update(const UsageData* data) {
         if (panel_weekly) lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_style_text_font(lbl_session_pct, L.pct_font, 0);
-        lv_label_set_text(lbl_session_label, "Current");
+        lv_label_set_text(lbl_session_label, split ? "Claude" : "Current");
         lv_obj_clear_flag(lbl_session_reset, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_spending_desc,   LV_OBJ_FLAG_HIDDEN);
@@ -630,7 +655,12 @@ void ui_update(const UsageData* data) {
                         LV_ALIGN_OUT_RIGHT_TOP, 4, 12);
     } else {
         lv_label_set_text_fmt(lbl_session_pct, "%d%%", s_pct);
-        format_reset_time(data->session_reset_mins, buf, sizeof(buf));
+        if (split) {
+            format_split_reset(data->session_reset_mins, data->weekly_pct,
+                               buf, sizeof(buf));
+        } else {
+            format_reset_time(data->session_reset_mins, buf, sizeof(buf));
+        }
         lv_label_set_text(lbl_session_reset, buf);
     }
 
@@ -649,7 +679,22 @@ void ui_update(const UsageData* data) {
         snprintf(buf, sizeof(buf), "#%s %s# - #faf9f5 Resets %s#",
                  pace_hex, pace_text, data->reset_date);
         lv_label_set_text(lbl_weekly_reset, buf);
+    } else if (split) {
+        // Second panel = Codex's 5-hour window, mirroring the Claude panel above.
+        int c_pct = (int)(data->codex_session_pct + 0.5f);
+        lv_label_set_text(lbl_weekly_label, "Codex");
+        lv_label_set_text_fmt(lbl_weekly_pct, "%d%%", c_pct);
+        lv_bar_set_value(bar_weekly, c_pct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(bar_weekly, pct_color(data->codex_session_pct),
+                                  LV_PART_INDICATOR);
+        format_split_reset(data->codex_session_reset_mins, data->codex_weekly_pct,
+                           buf, sizeof(buf));
+        lv_label_set_text(lbl_weekly_reset, buf);
     } else {
+        // Set explicitly rather than relying on the creation-time text: the
+        // panel is relabelled by the enterprise and split branches above, and
+        // both can turn off at runtime (config change, Codex going away).
+        lv_label_set_text(lbl_weekly_label, "Weekly");
         int w_pct = (int)(data->weekly_pct + 0.5f);
         lv_label_set_text_fmt(lbl_weekly_pct, "%d%%", w_pct);
         lv_bar_set_value(bar_weekly, w_pct, LV_ANIM_ON);

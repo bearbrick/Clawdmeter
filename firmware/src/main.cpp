@@ -120,6 +120,16 @@ static bool parse_json(const char* json, UsageData* out) {
     out->clock_epoch = doc["t"] | 0L;
     out->clock_fmt = doc["tf"] | 24;
     out->ok = doc["ok"] | false;
+
+    // Codex block ("x" prefix). Absent on a Claude-only host and from older
+    // daemons, so presence of the 5h key is what enables the split view — a
+    // zero reading is meaningful (window just reset) and must not disable it.
+    out->codex_valid = !doc["xs"].isNull();
+    out->codex_session_pct = doc["xs"] | 0.0f;
+    out->codex_session_reset_mins = doc["xsr"] | -1;
+    out->codex_weekly_pct = doc["xw"] | 0.0f;
+    out->codex_weekly_reset_mins = doc["xwr"] | -1;
+
     out->valid = true;
     return true;
 }

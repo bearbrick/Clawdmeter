@@ -24,6 +24,13 @@ import httpx
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+# launchd runs this as a script (sys.path[0] = daemon/); the tests import it as
+# daemon.claude_usage_daemon (sys.path[0] = repo root). Both must resolve.
+try:
+    from codex_usage import read_codex_usage
+except ImportError:  # pragma: no cover - depends on how the module was loaded
+    from daemon.codex_usage import read_codex_usage
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -356,11 +363,57 @@ def read_clock_setting() -> str:
     return "off"
 
 
+def read_codex_setting() -> str:
+    """Read the `codex` option from the config file. One of: auto|off.
+
+    Defaults to "auto": show Codex usage alongside Claude whenever the Codex
+    CLI has written a rate-limit snapshot locally, and stay single-provider when
+    it hasn't. "off" suppresses the second panel on a machine that has Codex
+    installed but doesn't want it on the display.
+    """
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key.strip().lower() == "codex":
+                    val = val.strip().lower()
+                    if val in ("auto", "off"):
+                        return val
+    except OSError:
+        pass
+    return "auto"
+
+
 def add_chime_field(payload: dict) -> None:
     """Add "c":1 to the payload when the config opts in, so the firmware may
     sound the session-reset chime. Omitted entirely when chime is off."""
     if read_chime_setting() == "on":
         payload["c"] = 1
+
+
+def add_codex_fields(payload: dict) -> None:
+    """Merge Codex usage (xs/xsr/xw/xwr/xacct) into the payload when available.
+
+    Omitted entirely when Codex has nothing to report, which is what keeps a
+    Claude-only machine on the existing single-provider view — the firmware
+    splits the screen only once it sees these keys.
+
+    Codex is a read-only side channel over local files; a surprise in one of
+    them must never cost the Claude reading that is this device's main job, so
+    every failure degrades to "no Codex" rather than propagating.
+    """
+    if read_codex_setting() == "off":
+        return
+    try:
+        codex = read_codex_usage()
+    except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
+        log(f"Codex read failed ({e}); continuing without it")
+        return
+    if codex:
+        payload.update(codex)
 
 
 def detect_hour_format() -> int:
@@ -575,6 +628,9 @@ async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, 
     active = selector.choose(sessions)
     if len(dirs) > 1:
         log(f"Active plan: {active} (s={sessions[active]})")
+    # Codex rides along on the active plan's payload rather than being polled
+    # per-dir: it is a property of the host, not of a Claude config dir.
+    add_codex_fields(payloads[active])
     return payloads[active], False
 
 

@@ -30,3 +30,13 @@ chime = off
 #   12   = show the clock, forced 12-hour  (e.g. 6:28 PM)
 #   24   = show the clock, forced 24-hour  (e.g. 18:28)
 clock = off
+
+# Show Codex usage alongside Claude, splitting the Usage screen into a Claude
+# panel and a Codex panel. Read straight out of the Codex CLI's own session
+# rollouts (~/.codex/sessions) — no API call, no OpenAI credentials, no quota
+# spent. Requires the Codex CLI signed in to a ChatGPT subscription; an
+# API-key setup has no 5h/weekly windows to report.
+#   auto = split the screen whenever Codex has usage to show (default);
+#          stay single-provider when it doesn't
+#   off  = never show Codex, even when it's installed
+codex = auto

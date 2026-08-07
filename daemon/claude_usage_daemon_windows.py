@@ -26,6 +26,13 @@ from bleak import BleakClient
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
 
+# The tray app imports this as daemon.claude_usage_daemon_windows (sys.path[0] =
+# repo root); running the file directly puts daemon/ there instead. Both resolve.
+try:
+    from codex_usage import read_codex_usage
+except ImportError:  # pragma: no cover - depends on how the module was loaded
+    from daemon.codex_usage import read_codex_usage
+
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID = "4c41555a-4465-7669-6365-000000000002"
@@ -161,6 +168,52 @@ def add_chime_field(payload: dict) -> None:
         payload["c"] = 1
 
 
+def read_codex_setting() -> str:
+    """Read the `codex` option from the config file. One of: auto|off.
+
+    Defaults to "auto": show Codex usage alongside Claude whenever the Codex
+    CLI has written a rate-limit snapshot locally, and stay single-provider when
+    it hasn't. "off" suppresses the second panel on a machine that has Codex
+    installed but doesn't want it on the display.
+    """
+    try:
+        if CONFIG_FILE.exists():
+            for line in CONFIG_FILE.read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key.strip().lower() == "codex":
+                    val = val.strip().lower()
+                    if val in ("auto", "off"):
+                        return val
+    except OSError:
+        pass
+    return "auto"
+
+
+def add_codex_fields(payload: dict) -> None:
+    """Merge Codex usage (xs/xsr/xw/xwr/xacct) into the payload when available.
+
+    Omitted entirely when Codex has nothing to report, which is what keeps a
+    Claude-only machine on the existing single-provider view — the firmware
+    splits the screen only once it sees these keys.
+
+    Codex is a read-only side channel over local files; a surprise in one of
+    them must never cost the Claude reading that is this device's main job, so
+    every failure degrades to "no Codex" rather than propagating.
+    """
+    if read_codex_setting() == "off":
+        return
+    try:
+        codex = read_codex_usage()
+    except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
+        log(f"Codex read failed ({e}); continuing without it")
+        return
+    if codex:
+        payload.update(codex)
+
+
 def detect_hour_format() -> int:
     """Best-effort 12h/24h detection on Windows via the registry. Returns 12 or 24."""
     try:
@@ -246,6 +299,7 @@ async def poll_api(token: str) -> dict | None:
         }
     add_chime_field(payload)   # adds "c":1 iff the config opts in
     add_clock_fields(payload)   # adds "t" + "tf" iff the config opts in
+    add_codex_fields(payload)   # adds the "x*" block iff Codex has usage locally
     return payload
 
 

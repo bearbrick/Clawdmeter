@@ -184,3 +184,12 @@ Bash daemon (`daemon/claude-usage-daemon.sh`) reads OAuth token, polls Anthropic
 - `...0002` RX — daemon writes JSON usage payload here.
 - `...0003` TX — firmware notifies ack/nack (daemon doesn't subscribe).
 - `...0004` REQ — firmware fires `0x01` notify in `onSubscribe` if `has_received_data` is false. Daemon subscribes via `setsid bash -c "stdbuf -oL dbus-monitor … | awk …"`; awk drops a flag file the inner loop picks up. See the `feedback_dbus_monitor_pipe` memory for the three subtle gotchas (pipe buffering, busctl-exits race, `wait` blocking on pipeline jobs).
+
+**Multi-provider (Codex).** `daemon/codex_usage.py` reads the Codex CLI's own rate-limit snapshots out of `~/.codex/sessions/**/rollout-*.jsonl` — no API call, no OpenAI credentials. Its `primary` (300 min) / `secondary` (10080 min) windows are structurally identical to Anthropic's unified-5h / unified-7d pair, which is why both providers collapse onto one payload and one screen. Merged as an `x`-prefixed block (`xs`/`xsr`/`xw`/`xwr`/`xacct`) by `add_codex_fields()` in the macOS and Windows daemons; the bash daemon is Claude-only. Four things to know before touching it:
+
+- **Rollouts run to hundreds of MB.** `_rate_limits_from_tail()` seeks to EOF and scans backwards in 256 KB chunks, capped at 4 MB — never parse one whole. A 628 MB rollout resolves in ~0.02 s.
+- **Snapshots expire.** Past a window's `resets_at` the recorded percentage describes a window that has already rolled, so `_window()` reports 0 rather than the stale number. Without this a month-old rollout renders as a plausible-looking 68%.
+- **Absence is the signal.** No Codex keys in the payload ⇒ firmware keeps the original Current/Weekly view (`codex_valid` in `data.h`). Never send zeroed keys to mean "no Codex" — a real 0% is meaningful and must still split the screen.
+- **Codex must never break Claude.** `add_codex_fields()` swallows every exception; reading local files is a side channel, and the Claude reading is the device's main job.
+
+**Testing gotcha:** `poll_active()` merges Codex from the *real* `~/.codex`, so tests asserting exact payloads must `monkeypatch.setattr(mod, "read_codex_usage", lambda: None)`. `test_macos_multidir.py` does this and covers the merge separately.
