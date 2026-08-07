@@ -323,10 +323,18 @@ static void format_reset_time(int mins, char* buf, size_t len) {
 
 static void format_split_reset(int mins, int window_mins, bool has_weekly,
                                float weekly_pct, char* buf, size_t len) {
-    char t[16];
+    int w_pct = (int)(weekly_pct + 0.5f);
+
+    // Unknown countdown: joining the two halves would render "Resets --- - Week
+    // 15%", where the "--- -" run reads as a display fault. Drop the dead half.
     if (mins < 0) {
-        snprintf(t, sizeof(t), "---");
-    } else if (mins < 60) {
+        if (has_weekly) snprintf(buf, len, "Week %d%%", w_pct);
+        else            snprintf(buf, len, "---");
+        return;
+    }
+
+    char t[16];
+    if (mins < 60) {
         snprintf(t, sizeof(t), "%dm", mins);
     } else if (mins < 1440) {
         snprintf(t, sizeof(t), "%dh %dm", mins / 60, mins % 60);
@@ -335,7 +343,7 @@ static void format_split_reset(int mins, int window_mins, bool has_weekly,
     }
     const char* head = (window_mins >= WINDOW_WEEKLY_MINS) ? "Week resets" : "Resets";
     if (has_weekly) {
-        snprintf(buf, len, "%s %s - Week %d%%", head, t, (int)(weekly_pct + 0.5f));
+        snprintf(buf, len, "%s %s - Week %d%%", head, t, w_pct);
     } else {
         snprintf(buf, len, "%s %s", head, t);
     }
