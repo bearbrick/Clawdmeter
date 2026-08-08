@@ -38,7 +38,8 @@ struct Layout {
     int16_t bar_h;
     int16_t panel_pad_x, panel_pad_y;
     int16_t pill_pad_x, pill_pad_y;
-    const lv_font_t* title_font;     // screen title / clock
+    const lv_font_t* title_font;     // screen title ("Usage")
+    const lv_font_t* clock_font;     // title clock — matches the percentages
     const lv_font_t* pct_font;       // big percentage number
     const lv_font_t* ent_pct_font;   // enterprise spending number
     const lv_font_t* pill_font;      // "Current" / "Weekly" pill
@@ -173,6 +174,11 @@ static void compute_layout(const BoardCaps& c) {
         L.bt_credit_1_font = &font_styrene_12;
         L.bt_credit_2_font = &font_styrene_12;
     }
+
+    // The clock is a number, so it reads as one of the readouts rather than as
+    // a heading — track the percentage font at every breakpoint instead of the
+    // serif title face.
+    L.clock_font = L.pct_font;
 
     L.content_w = L.scr_w - 2 * L.margin;
 }
@@ -627,6 +633,7 @@ void ui_update(const UsageData* data) {
     } else if (clock_base_epoch != 0) {   // clock turned off daemon-side → revert title to "Usage"
         clock_base_epoch = 0;
         clock_last_min = -1;
+        lv_obj_set_style_text_font(lbl_title, L.title_font, 0);
         lv_label_set_text(lbl_title, "Usage");
     }
 
@@ -772,6 +779,7 @@ void ui_tick_anim(void) {
             } else {
                 snprintf(tbuf, sizeof(tbuf), "%02d:%02d", tmv.tm_hour, tmv.tm_min);
             }
+            lv_obj_set_style_text_font(lbl_title, L.clock_font, 0);
             lv_label_set_text(lbl_title, tbuf);
         }
     }
