@@ -314,62 +314,64 @@ static bool format_countdown(int mins, char* buf, size_t len) {
     return true;
 }
 
-// day is the weekday the window rolls over on ("Thu"), or NULL/"" when the
-// daemon didn't supply one (older daemon, or a reset stamp already in the past).
-// A multi-day countdown says how long but not *which day* — the thing you
-// actually need to plan around a weekly limit — so it rides along when known.
-static void format_reset_time(int mins, const char* day, char* buf, size_t len) {
+static void format_reset_time(int mins, char* buf, size_t len) {
     char t[16];
-    if (!format_countdown(mins, t, sizeof(t))) {
-        snprintf(buf, len, "---");
-        return;
-    }
-    if (day && day[0]) snprintf(buf, len, "Resets in %s (%s)", t, day);
-    else               snprintf(buf, len, "Resets in %s", t);
+    if (!format_countdown(mins, t, sizeof(t))) snprintf(buf, len, "---");
+    else                                       snprintf(buf, len, "Resets in %s", t);
+}
+
+// Coarser countdown for the weekly half of the split line, which has far less
+// width to spend than the headline. Hours-only between an hour and a day is
+// the whole point: "22h 23m" carries two 2-digit numbers and measures 427px
+// inside a 408px panel, where "22h" measures 358px. The lost precision —
+// minutes on a countdown still measured in hours — isn't precision you can act
+// on anyway. Below an hour minutes come back, which is where they start to
+// matter and where the string is short enough to afford them.
+static bool format_countdown_coarse(int mins, char* buf, size_t len) {
+    if (mins < 0) return false;
+    if (mins < 60)        snprintf(buf, len, "%dm", mins);
+    else if (mins < 1440) snprintf(buf, len, "%dh", mins / 60);
+    else                  snprintf(buf, len, "%dd %dh", mins / 1440, (mins % 1440) / 60);
+    return true;
 }
 
 // Reset line for the split (Claude + Codex) view. Two providers share the space
 // one provider's two windows used to have, so the weekly window gives up its own
 // panel and folds in here as secondary text behind the headline countdown:
 //
-//     4h 28m - Week 18% Thu
+//     4h 28m - Week 18% 6d 23h
 //
 // The leading "Resets" was dropped to buy back width — the panel's pill already
 // says which window the big number belongs to, so the label was carrying no
 // information the line needed. The separator is ASCII because the bundled font
 // subsets carry no punctuation beyond it.
 //
-// show_week / week_pct / week_day are resolved by the caller, because which
+// show_week / week_pct / week_mins are resolved by the caller, because which
 // window fills the "Week" half depends on what the provider reports: normally
 // the secondary window, but on plans exposing a weekly limit *only* (some Codex
-// accounts today) the headline window is itself the weekly one and fills both
-// halves. That repeats one window's reading twice, which is deliberate — the two
-// panels then always render the same shape, so the layout doesn't reflow if
-// Codex's 5-hour window comes back.
+// accounts today) the headline window is itself the weekly one, and there the
+// caller passes week_mins < 0 so the trailing countdown is dropped rather than
+// printing the headline's own countdown back verbatim.
 #define WINDOW_WEEKLY_MINS 10080
 
 static void format_split_reset(int mins, bool show_week, float week_pct,
-                               const char* week_day, char* buf, size_t len) {
+                               int week_mins, char* buf, size_t len) {
     int w_pct = (int)(week_pct + 0.5f);
-    char head[16];
+    char head[16], tail[16];
+    bool has_tail = show_week && format_countdown_coarse(week_mins, tail, sizeof(tail));
 
     // Unknown countdown: joining the two halves would render "--- - Week 15%",
     // where the "--- -" run reads as a display fault. Drop the dead half.
     if (!format_countdown(mins, head, sizeof(head))) {
-        if (show_week) snprintf(buf, len, "Week %d%%%s%s", w_pct,
-                                (week_day && week_day[0]) ? " " : "",
-                                (week_day && week_day[0]) ? week_day : "");
-        else           snprintf(buf, len, "---");
+        if (show_week && has_tail) snprintf(buf, len, "Week %d%% %s", w_pct, tail);
+        else if (show_week)        snprintf(buf, len, "Week %d%%", w_pct);
+        else                       snprintf(buf, len, "---");
         return;
     }
 
-    if (!show_week) {
-        snprintf(buf, len, "%s", head);
-    } else if (week_day && week_day[0]) {
-        snprintf(buf, len, "%s - Week %d%% %s", head, w_pct, week_day);
-    } else {
-        snprintf(buf, len, "%s - Week %d%%", head, w_pct);
-    }
+    if (!show_week)   snprintf(buf, len, "%s", head);
+    else if (has_tail) snprintf(buf, len, "%s - Week %d%% %s", head, w_pct, tail);
+    else               snprintf(buf, len, "%s - Week %d%%", head, w_pct);
 }
 
 // Forward decls — callbacks defined near ui_show_screen below
@@ -701,11 +703,9 @@ void ui_update(const UsageData* data) {
         if (split) {
             // Claude always reports both windows: 5h headline, weekly folded in.
             format_split_reset(data->session_reset_mins, true, data->weekly_pct,
-                               data->weekly_reset_day, buf, sizeof(buf));
+                               data->weekly_reset_mins, buf, sizeof(buf));
         } else {
-            // The 5h window has no weekday worth showing — it rolls several
-            // times a day, so the countdown is the whole story.
-            format_reset_time(data->session_reset_mins, NULL, buf, sizeof(buf));
+            format_reset_time(data->session_reset_mins, buf, sizeof(buf));
         }
         lv_label_set_text(lbl_session_reset, buf);
     }
@@ -736,12 +736,16 @@ void ui_update(const UsageData* data) {
         // With no second window, the headline fills the "Week" half too — but
         // only when it is genuinely a weekly window. A lone 5-hour window
         // labelled "Week" would be a lie, so that case still drops the half.
+        // Its countdown is deliberately left out (-1): the headline already
+        // shows it, and repeating the identical string twice on one line reads
+        // as a rendering fault rather than as two readings.
         bool cx_week = data->codex_has_weekly ||
                        data->codex_window_mins >= WINDOW_WEEKLY_MINS;
         float cx_week_pct = data->codex_has_weekly ? data->codex_weekly_pct
                                                    : data->codex_session_pct;
+        int cx_week_mins = data->codex_has_weekly ? data->codex_weekly_reset_mins : -1;
         format_split_reset(data->codex_session_reset_mins, cx_week, cx_week_pct,
-                           data->codex_weekly_reset_day, buf, sizeof(buf));
+                           cx_week_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     } else {
         // Set explicitly rather than relying on the creation-time text: the
@@ -752,8 +756,7 @@ void ui_update(const UsageData* data) {
         lv_label_set_text_fmt(lbl_weekly_pct, "%d%%", w_pct);
         lv_bar_set_value(bar_weekly, w_pct, LV_ANIM_ON);
         lv_obj_set_style_bg_color(bar_weekly, pct_color(data->weekly_pct), LV_PART_INDICATOR);
-        format_reset_time(data->weekly_reset_mins, data->weekly_reset_day,
-                          buf, sizeof(buf));
+        format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
         lv_label_set_text(lbl_weekly_reset, buf);
     }
 }

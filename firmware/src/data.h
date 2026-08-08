@@ -6,7 +6,6 @@ struct UsageData {
     int session_reset_mins;  // minutes until reset
     float weekly_pct;        // 7-day utilization (Pro/Max only; 0 for Enterprise)
     int weekly_reset_mins;   // minutes until weekly reset (Pro/Max only)
-    char weekly_reset_day[4];// weekday the 7d window rolls over, e.g. "Thu"; "" = unknown
     char status[16];         // "allowed", "limited", etc.
     bool chime;              // play the session-reset chime; false unless daemon opts in
     bool enterprise;         // true = Enterprise spending-limit account
@@ -32,7 +31,6 @@ struct UsageData {
     int   codex_window_mins;       // headline window length (300 = 5h, 10080 = weekly)
     float codex_weekly_pct;        // secondary window utilization 0-100
     int   codex_weekly_reset_mins;
-    char  codex_weekly_reset_day[4]; // weekday the weekly window rolls over; "" = unknown
     bool  codex_has_weekly;        // false when Codex reports one window only
     bool  codex_valid;
 };
