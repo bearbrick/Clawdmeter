@@ -49,6 +49,12 @@ CHUNK = 256 * 1024
 # How many recent rollouts to try before giving up.
 MAX_FILES = 8
 
+# How many day directories to look through when gathering those rollouts. Has to
+# be more than one: a session filed under an older day can still be the one being
+# appended right now (see _recent_rollouts). Two weeks covers a chat left open
+# across a holiday without making the scan depend on ~/.codex's total size.
+MAX_DAYS = 14
+
 # window_minutes → which slot the window belongs in. Codex reports the actual
 # window length, so match on it rather than trusting primary/secondary ordering.
 FIVE_HOUR_MIN = 300
@@ -220,13 +226,25 @@ def _map_windows(rl: dict, now: float) -> dict | None:
 
 
 def _recent_rollouts(sessions: Path) -> list[Path]:
-    """Up to MAX_FILES rollout paths, newest first.
+    """Up to MAX_FILES rollout paths, newest-modified first.
 
     Descends the YYYY/MM/DD partitioning newest-branch-first rather than walking
     the whole tree — a long-lived ~/.codex holds thousands of rollouts, and only
     the newest few can carry a current snapshot.
+
+    Ordering is by **mtime across directories**, not by directory name, because
+    a rollout is filed under the day its session *started* and keeps being
+    appended for as long as that session stays open. A chat opened on the 6th
+    and still in use on the 8th holds the freshest snapshot in the world while
+    sitting in an older day directory than a session that ran once on the 7th
+    and ended. Ordering by directory name reads the stale one and stops there.
+
+    That is also why several day directories are scanned rather than stopping at
+    the first that fills the quota: the newest snapshot may be days "back" in
+    path terms. MAX_DAYS bounds the walk so the cost stays flat on a large
+    ~/.codex.
     """
-    found: list[Path] = []
+    candidates: list[Path] = []
 
     def _sorted_dirs(p: Path) -> list[Path]:
         try:
@@ -235,16 +253,30 @@ def _recent_rollouts(sessions: Path) -> list[Path]:
         except OSError:
             return []
 
+    days_seen = 0
     for year in _sorted_dirs(sessions):
         for month in _sorted_dirs(year):
             for day in _sorted_dirs(month):
+                if days_seen >= MAX_DAYS:
+                    break
+                days_seen += 1
                 try:
-                    files = [f for f in day.iterdir()
-                             if f.name.startswith("rollout-") and f.suffix == ".jsonl"]
+                    candidates.extend(
+                        f for f in day.iterdir()
+                        if f.name.startswith("rollout-") and f.suffix == ".jsonl"
+                    )
                 except OSError:
                     continue
-                files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-                found.extend(files)
-                if len(found) >= MAX_FILES:
-                    return found[:MAX_FILES]
-    return found[:MAX_FILES]
+            if days_seen >= MAX_DAYS:
+                break
+        if days_seen >= MAX_DAYS:
+            break
+
+    def _mtime(f: Path) -> float:
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0.0   # vanished mid-scan — sort it last rather than crash
+
+    candidates.sort(key=_mtime, reverse=True)
+    return candidates[:MAX_FILES]

@@ -7,6 +7,7 @@ degrade-to-None paths that keep the device on its single-provider view.
 Run: python -m pytest daemon/tests/test_codex_usage.py -x -q
 """
 import json
+import os
 import time
 
 from daemon.codex_usage import _rate_limits_from_tail, _window, read_codex_usage
@@ -200,3 +201,50 @@ def test_both_windows_null_returns_none(tmp_path):
     rl["primary"] = rl["secondary"] = None
     _write_rollout(tmp_path, events=[_event(rl)])
     assert read_codex_usage(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# rollout ordering across day directories
+# ---------------------------------------------------------------------------
+
+def test_long_session_in_older_day_dir_wins(tmp_path):
+    """A session filed under an older day but appended to most recently wins.
+
+    Rollouts are bucketed by the day the session *started*, so a chat opened on
+    the 6th and still in use on the 8th lives in 2026/08/06 while holding the
+    freshest snapshot. Ordering by directory name reads the finished 08/07
+    session instead and reports its stale percentage forever.
+    """
+    old_dir = _write_rollout(tmp_path, day="2026/08/06", name="rollout-open.jsonl",
+                             events=[_event(_rate_limits(20.0))])
+    new_dir = _write_rollout(tmp_path, day="2026/08/07", name="rollout-done.jsonl",
+                             events=[_event(_rate_limits(15.0))])
+    # The 08/06 session is the one still being written to.
+    os.utime(new_dir, (1_800_000_000, 1_800_000_000))
+    os.utime(old_dir, (1_800_086_400, 1_800_086_400))
+
+    assert read_codex_usage(tmp_path)["xs"] == 20
+
+
+def test_day_dir_order_still_breaks_mtime_ties(tmp_path):
+    """Equal mtimes keep the newest-day-first ordering, so behaviour is stable."""
+    a = _write_rollout(tmp_path, day="2026/08/06", name="rollout-a.jsonl",
+                       events=[_event(_rate_limits(20.0))])
+    b = _write_rollout(tmp_path, day="2026/08/07", name="rollout-b.jsonl",
+                       events=[_event(_rate_limits(15.0))])
+    os.utime(a, (1_800_000_000, 1_800_000_000))
+    os.utime(b, (1_800_000_000, 1_800_000_000))
+    assert read_codex_usage(tmp_path)["xs"] == 15
+
+
+def test_scan_is_bounded_by_max_days(tmp_path):
+    """A rollout further back than MAX_DAYS is not resurrected by mtime alone."""
+    from daemon.codex_usage import MAX_DAYS
+    for i in range(MAX_DAYS + 2):
+        _write_rollout(tmp_path, day="2026/07/%02d" % (i + 1),
+                       name="rollout-%02d.jsonl" % i,
+                       events=[_event(_rate_limits(float(i)))])
+    # The oldest directory is touched most recently, but falls outside the walk.
+    oldest = tmp_path / "sessions" / "2026" / "07" / "01" / "rollout-00.jsonl"
+    os.utime(oldest, (1_900_000_000, 1_900_000_000))
+    assert read_codex_usage(tmp_path)["xs"] != 0
