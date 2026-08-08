@@ -9,7 +9,13 @@ Run: python -m pytest daemon/tests/test_codex_usage.py -x -q
 import json
 import time
 
-from daemon.codex_usage import _rate_limits_from_tail, _window, read_codex_usage
+from daemon.codex_usage import (
+    WEEKDAYS,
+    _rate_limits_from_tail,
+    _window,
+    read_codex_usage,
+    weekday_abbrev,
+)
 
 
 def _rate_limits(primary_pct=14.0, secondary_pct=2.0, offset_5h=3600,
@@ -173,7 +179,7 @@ def test_weekly_only_plan_is_the_headline(tmp_path):
     _write_rollout(tmp_path, events=[_event(rl)])
     out = read_codex_usage(tmp_path)
     assert out["xs"] == 15
-    assert out["xwin"] == 10080        # display labels it "Week resets"
+    assert out["xwin"] == 10080        # display fills the "Week" half from it
     assert "xw" not in out             # no second window to fold in
     assert out["xacct"] == "plus"
 
@@ -200,6 +206,67 @@ def test_both_windows_null_returns_none(tmp_path):
     rl["primary"] = rl["secondary"] = None
     _write_rollout(tmp_path, events=[_event(rl)])
     assert read_codex_usage(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# weekly reset weekday (xwd)
+# ---------------------------------------------------------------------------
+
+def test_weekday_abbrev_is_ascii_not_locale_text():
+    """The device's subsetted fonts carry ASCII only.
+
+    strftime("%a") would emit "周四" on a zh_CN host and render as blanks, so
+    the abbreviation comes from a fixed table instead.
+    """
+    day = weekday_abbrev(time.time())
+    assert day in WEEKDAYS
+    assert day.isascii()
+
+
+def test_weekday_abbrev_repeats_every_seven_days():
+    now = time.time()
+    assert weekday_abbrev(now) == weekday_abbrev(now + 7 * 86400)
+    assert weekday_abbrev(now) != weekday_abbrev(now + 86400)
+
+
+def test_weekly_window_carries_reset_weekday(tmp_path):
+    now = time.time()
+    _write_rollout(tmp_path, events=[_event(_rate_limits(14.0, 2.0))])
+    out = read_codex_usage(tmp_path)
+    assert out["xwd"] == weekday_abbrev(now + 600000)
+
+
+def test_weekly_only_plan_still_carries_weekday(tmp_path):
+    """The lone weekly window fills the display's "Week" half, so it needs a day."""
+    now = time.time()
+    rl = _rate_limits()
+    rl["primary"] = {"used_percent": 15.0, "window_minutes": 10080,
+                     "resets_at": now + 600000}
+    rl["secondary"] = None
+    _write_rollout(tmp_path, events=[_event(rl)])
+    out = read_codex_usage(tmp_path)
+    assert out["xwd"] == weekday_abbrev(now + 600000)
+
+
+def test_five_hour_only_plan_has_no_weekday(tmp_path):
+    """No weekly window means no weekly reset day to report."""
+    rl = _rate_limits()
+    rl["secondary"] = None
+    _write_rollout(tmp_path, events=[_event(rl)])
+    assert "xwd" not in read_codex_usage(tmp_path)
+
+
+def test_stale_weekly_window_drops_weekday(tmp_path):
+    """Past its reset the snapshot describes a window that has already rolled.
+
+    Its percentage is already suppressed to 0; the weekday must go the same way
+    rather than naming a reset that has been and gone.
+    """
+    rl = _rate_limits(offset_week=-600)
+    _write_rollout(tmp_path, events=[_event(rl)])
+    out = read_codex_usage(tmp_path)
+    assert out["xw"] == 0
+    assert "xwd" not in out
 
 
 def test_read_without_codex_returns_none(tmp_path):

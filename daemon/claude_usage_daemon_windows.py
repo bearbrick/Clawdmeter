@@ -29,9 +29,9 @@ from bleak.exc import BleakError
 # The tray app imports this as daemon.claude_usage_daemon_windows (sys.path[0] =
 # repo root); running the file directly puts daemon/ there instead. Both resolve.
 try:
-    from codex_usage import read_codex_usage
+    from codex_usage import read_codex_usage, weekday_abbrev
 except ImportError:  # pragma: no cover - depends on how the module was loaded
-    from daemon.codex_usage import read_codex_usage
+    from daemon.codex_usage import read_codex_usage, weekday_abbrev
 
 DEVICE_NAME = "Clawdmeter"
 SERVICE_UUID = "4c41555a-4465-7669-6365-000000000001"
@@ -275,6 +275,18 @@ async def poll_api(token: str) -> dict | None:
         except ValueError:
             return 0
 
+    def reset_weekday(reset_ts: str) -> str:
+        """Weekday the window rolls over on, or "" when the stamp is unusable.
+
+        A "6d 23h" countdown doesn't tell you which day that lands on, which is
+        the one thing you need to plan around a weekly limit.
+        """
+        try:
+            r = float(reset_ts)
+        except ValueError:
+            return ""
+        return weekday_abbrev(r) if r > now else ""
+
     if resp.headers.get("anthropic-ratelimit-unified-5h-utilization"):
         payload = {
             "s": pct(hdr("anthropic-ratelimit-unified-5h-utilization")),
@@ -285,6 +297,11 @@ async def poll_api(token: str) -> dict | None:
             "acct": "pro",
             "ok": True,
         }
+        # Omitted rather than sent empty: the firmware treats absence as "no
+        # weekday known" and just renders the countdown.
+        wd = reset_weekday(hdr("anthropic-ratelimit-unified-7d-reset"))
+        if wd:
+            payload["wd"] = wd
     else:
         reset_ts = hdr("anthropic-ratelimit-unified-overage-reset")
         payload = {

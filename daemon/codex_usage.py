@@ -54,6 +54,23 @@ MAX_FILES = 8
 FIVE_HOUR_MIN = 300
 WEEKLY_MIN = 10080
 
+# Fixed English abbreviations rather than strftime("%a"): %a follows the host
+# locale, and a zh_CN Mac would emit "周四" — glyphs the device's subsetted
+# Styrene fonts don't carry, so the label would render blank.
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def weekday_abbrev(epoch: float) -> str:
+    """Local-time weekday abbreviation for an absolute epoch, or "" if unusable.
+
+    Local time is the right frame: the user wants to know which of *their* days
+    the window rolls over on.
+    """
+    try:
+        return WEEKDAYS[time.localtime(epoch).tm_wday]
+    except (ValueError, OSError, OverflowError):
+        return ""
+
 
 def codex_home() -> Path:
     """Root of the Codex CLI's state, honoring CODEX_HOME like the CLI does."""
@@ -144,6 +161,24 @@ def _window(w, now: float) -> tuple[int, int] | None:
     return int(round(pct)), int(round(remaining))
 
 
+def _reset_epoch(w, now: float) -> float | None:
+    """Absolute reset timestamp for one window, or None when unusable.
+
+    Mirrors _window's resolution (absolute stamp preferred, relative countdown
+    anchored to now), but lives apart so _window keeps returning a 2-tuple —
+    callers and tests unpack it positionally.
+    """
+    if not isinstance(w, dict):
+        return None
+    resets_at = w.get("resets_at")
+    if isinstance(resets_at, (int, float)):
+        return float(resets_at)
+    secs = w.get("resets_in_seconds")
+    if isinstance(secs, (int, float)):
+        return now + secs
+    return None
+
+
 def read_codex_usage(home: Path | None = None) -> dict | None:
     """Codex usage as wire-payload fields, or None when unavailable.
 
@@ -185,6 +220,7 @@ def _map_windows(rl: dict, now: float) -> dict | None:
     """
     ordered: list[tuple[object, tuple[int, int]]] = []
     by_len: dict[int, tuple[int, int]] = {}
+    raw_by_len: dict[int, dict] = {}
     for slot in ("primary", "secondary"):
         w = rl.get(slot)
         parsed = _window(w, now)
@@ -194,6 +230,7 @@ def _map_windows(rl: dict, now: float) -> dict | None:
         ordered.append((length, parsed))
         if isinstance(length, int):
             by_len[length] = parsed
+            raw_by_len[length] = w
 
     if not ordered:
         return None
@@ -213,6 +250,18 @@ def _map_windows(rl: dict, now: float) -> dict | None:
         out["xwin"] = headline_len
     if secondary is not None:
         out["xw"], out["xwr"] = secondary
+    # Which weekday the weekly window rolls over on — the thing a countdown of
+    # "6d 23h" doesn't actually tell you. Attached to the weekly window whether
+    # it is the secondary one or (on plans reporting only a weekly limit) the
+    # headline itself. Omitted past the stamp: the snapshot's window has already
+    # rolled, so its weekday describes a reset that has been and gone.
+    weekly_raw = raw_by_len.get(WEEKLY_MIN)
+    if weekly_raw is not None:
+        epoch = _reset_epoch(weekly_raw, now)
+        if epoch is not None and epoch > now:
+            day = weekday_abbrev(epoch)
+            if day:
+                out["xwd"] = day
     plan = rl.get("plan_type")
     if isinstance(plan, str) and plan:
         out["xacct"] = plan

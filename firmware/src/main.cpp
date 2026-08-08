@@ -110,6 +110,9 @@ static bool parse_json(const char* json, UsageData* out) {
     out->session_reset_mins = doc["sr"] | -1;
     out->weekly_pct = doc["w"] | 0.0f;
     out->weekly_reset_mins = doc["wr"] | -1;
+    // Absent from older daemons and past a stale reset stamp — "" then means
+    // "no weekday known" and the line falls back to the bare countdown.
+    strlcpy(out->weekly_reset_day, doc["wd"] | "", sizeof(out->weekly_reset_day));
     strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
     out->chime = doc["c"] | false;   // absent (old daemon / chime off) → stay silent
     const char* acct = doc["acct"] | "pro";
@@ -132,6 +135,8 @@ static bool parse_json(const char* json, UsageData* out) {
     out->codex_has_weekly = !doc["xw"].isNull();
     out->codex_weekly_pct = doc["xw"] | 0.0f;
     out->codex_weekly_reset_mins = doc["xwr"] | -1;
+    strlcpy(out->codex_weekly_reset_day, doc["xwd"] | "",
+            sizeof(out->codex_weekly_reset_day));
 
     out->valid = true;
     return true;
