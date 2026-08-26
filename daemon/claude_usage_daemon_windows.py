@@ -192,6 +192,17 @@ def read_codex_setting() -> str:
     return "auto"
 
 
+def _read_codex_fields() -> dict | None:
+    """Read Codex defensively; local telemetry must never break another source."""
+    if read_codex_setting() == "off":
+        return None
+    try:
+        return read_codex_usage()
+    except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
+        log(f"Codex read failed ({e}); continuing without it")
+        return None
+
+
 def add_codex_fields(payload: dict) -> None:
     """Merge Codex usage (xs/xsr/xw/xwr/xacct) into the payload when available.
 
@@ -203,15 +214,32 @@ def add_codex_fields(payload: dict) -> None:
     them must never cost the Claude reading that is this device's main job, so
     every failure degrades to "no Codex" rather than propagating.
     """
-    if read_codex_setting() == "off":
-        return
-    try:
-        codex = read_codex_usage()
-    except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
-        log(f"Codex read failed ({e}); continuing without it")
-        return
+    codex = _read_codex_fields()
     if codex:
         payload.update(codex)
+
+
+def codex_only_payload() -> dict | None:
+    """Build a standalone usage frame when Claude has no usable reading."""
+    codex = _read_codex_fields()
+    if not codex:
+        return None
+    has_weekly = "xw" in codex
+    payload = {
+        "s": codex["xs"],
+        "sr": codex.get("xsr", -1),
+        "w": codex.get("xw", 0),
+        "wr": codex.get("xwr", -1),
+        "st": "allowed",
+        "acct": "codex",
+        "src": "codex",
+        "win": codex.get("xwin", 300),
+        "hw": has_weekly,
+        "ok": True,
+    }
+    add_chime_field(payload)
+    add_clock_fields(payload)
+    return payload
 
 
 def detect_hour_format() -> int:
@@ -675,11 +703,18 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                 # show "No data" until the CLI re-seeds it.
                 token = read_token()  # D-09: fresh each cycle
                 if not token:
-                    log("No token; signalling no-data to device")
-                    if tray_state:
-                        tray_state.set_error("token expired — run claude login")
-                    if await session.write_payload({"ok": False}):
+                    payload = codex_only_payload()
+                    if payload:
+                        log("No Claude token; sending Codex-only usage")
+                        if tray_state:
+                            tray_state.set_connected(time.time())
+                    else:
+                        log("No token; signalling no-data to device")
+                        if tray_state:
+                            tray_state.set_error("token expired — run claude login")
+                    if await session.write_payload(payload or {"ok": False}):
                         last_poll = time.time()
+                        used_successfully = used_successfully or payload is not None
                         consecutive_failures = 0  # D-03: healthy link
                     elif note_write_failure():
                         break
@@ -692,10 +727,7 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                         # Pure free-ride: we never refresh. A 401/403 means Claude Code's
                         # token has expired and only Claude Code (its owner) can re-seed it.
                         expired = True
-                        log("Token expired/invalid; signalling no-data — run `claude login` "
-                            "or use the CLI to let Claude Code renew it")
-                        if tray_state:
-                            tray_state.set_error("token expired — run claude login")
+                        log("Claude token expired/invalid; checking Codex fallback")
                     if payload is not None:
                         if await session.write_payload(payload):
                             last_poll = time.time()
@@ -706,19 +738,34 @@ async def connect_and_run(device, stop_event: asyncio.Event, tray_state=None) ->
                         elif note_write_failure():
                             break
                     elif expired:
-                        # Token genuinely dead -> show "No data" now instead of stale numbers.
-                        # Transient poll failures (payload None without expiry) stay silent.
-                        log("No data (token dead); signalling idle to device")
-                        if await session.write_payload({"ok": False}):
+                        # A dead Claude token must not suppress a healthy local
+                        # Codex reading. Fall back to idle only when both are absent.
+                        fallback = codex_only_payload()
+                        log("Claude token dead; sending Codex-only usage" if fallback else
+                            "No data (token dead); signalling idle to device")
+                        if tray_state:
+                            if fallback:
+                                tray_state.set_connected(time.time())
+                            else:
+                                tray_state.set_error("token expired — run claude login")
+                        if await session.write_payload(fallback or {"ok": False}):
                             last_poll = time.time()
+                            used_successfully = used_successfully or fallback is not None
                             consecutive_failures = 0  # D-03: healthy link
                         elif note_write_failure():
                             break
-                    # else: payload is None from a TRANSIENT failure (network/DNS,
-                    # timeout, rate-limit, 5xx). poll_api already logged it; do NOT
-                    # toast "token expired" — that mislabeled a boot-time DNS blip
-                    # as an auth problem (SC#5). Leave tray state unchanged; the next
-                    # tick retries and set_connected() recovers it.
+                    elif (fallback := codex_only_payload()) is not None:
+                        # A transient Claude network failure still leaves Codex's
+                        # local rollout snapshot usable and fresh enough to display.
+                        log("Claude poll unavailable; sending Codex-only usage")
+                        if await session.write_payload(fallback):
+                            last_poll = time.time()
+                            used_successfully = True
+                            consecutive_failures = 0
+                            if tray_state:
+                                tray_state.set_connected(time.time())
+                        elif note_write_failure():
+                            break
 
             # Wake on a refresh request OR a stop, whichever comes first. Waking
             # promptly on stop_event is what lets the finally below run

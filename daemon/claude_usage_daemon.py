@@ -394,6 +394,17 @@ def add_chime_field(payload: dict) -> None:
         payload["c"] = 1
 
 
+def _read_codex_fields() -> dict | None:
+    """Read Codex defensively; local telemetry must never break another source."""
+    if read_codex_setting() == "off":
+        return None
+    try:
+        return read_codex_usage()
+    except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
+        log(f"Codex read failed ({e}); continuing without it")
+        return None
+
+
 def add_codex_fields(payload: dict) -> None:
     """Merge Codex usage (xs/xsr/xw/xwr/xacct) into the payload when available.
 
@@ -405,15 +416,38 @@ def add_codex_fields(payload: dict) -> None:
     them must never cost the Claude reading that is this device's main job, so
     every failure degrades to "no Codex" rather than propagating.
     """
-    if read_codex_setting() == "off":
-        return
-    try:
-        codex = read_codex_usage()
-    except Exception as e:  # noqa: BLE001 - deliberately broad, see docstring
-        log(f"Codex read failed ({e}); continuing without it")
-        return
+    codex = _read_codex_fields()
     if codex:
         payload.update(codex)
+
+
+def codex_only_payload() -> dict | None:
+    """Build a normal usage frame from Codex when Claude is unavailable.
+
+    Keeping Codex in the base ``s/w`` slots makes this backward-compatible with
+    older firmware: it will say Current/Weekly rather than idling. New firmware
+    uses ``src``/``win``/``hw`` to label the provider and hide an absent second
+    window accurately.
+    """
+    codex = _read_codex_fields()
+    if not codex:
+        return None
+    has_weekly = "xw" in codex
+    payload = {
+        "s": codex["xs"],
+        "sr": codex.get("xsr", -1),
+        "w": codex.get("xw", 0),
+        "wr": codex.get("xwr", -1),
+        "st": "allowed",
+        "acct": "codex",
+        "src": "codex",
+        "win": codex.get("xwin", 300),
+        "hw": has_weekly,
+        "ok": True,
+    }
+    add_chime_field(payload)
+    add_clock_fields(payload)
+    return payload
 
 
 def detect_hour_format() -> int:
@@ -624,6 +658,9 @@ async def poll_active(selector: PlanSelector = _SELECTOR) -> tuple[dict | None, 
             payloads[d] = payload
             sessions[d] = int(payload.get("s", 0) or 0)
     if not payloads:
+        codex = codex_only_payload()
+        if codex:
+            return codex, False
         return None, not any_live
     active = selector.choose(sessions)
     if len(dirs) > 1:

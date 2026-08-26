@@ -177,8 +177,45 @@ def test_codex_read_failure_does_not_break_claude(monkeypatch):
 def test_poll_active_payload_returns_none_when_all_fail(monkeypatch):
     monkeypatch.setattr(mod, "read_config_dirs", lambda: [A, B])
     monkeypatch.setattr(mod, "read_token_for", lambda d: None)
+    monkeypatch.setattr(mod, "read_codex_usage", lambda: None)
     with patch.object(mod, "poll_api", new=AsyncMock(return_value=None)):
         assert _run(mod.poll_active_payload(PlanSelector())) is None
+
+
+def test_poll_active_payload_falls_back_to_codex_without_claude_token(monkeypatch):
+    """A missing Claude credential must not suppress a valid Codex snapshot."""
+    monkeypatch.setattr(mod, "read_config_dirs", lambda: [A])
+    monkeypatch.setattr(mod, "read_token_for", lambda d: None)
+    monkeypatch.setattr(mod, "read_codex_setting", lambda: "auto")
+    monkeypatch.setattr(
+        mod,
+        "read_codex_usage",
+        lambda: {"xs": 4, "xsr": 298, "xwin": 300,
+                 "xw": 16, "xwr": 9433, "xacct": "plus"},
+    )
+    monkeypatch.setattr(mod, "read_clock_setting", lambda: "off")
+    monkeypatch.setattr(mod, "read_chime_setting", lambda: "off")
+
+    payload, dead = _run(mod.poll_active(PlanSelector()))
+    assert dead is False
+    assert payload == {
+        "s": 4, "sr": 298, "w": 16, "wr": 9433,
+        "st": "allowed", "acct": "codex", "src": "codex",
+        "win": 300, "hw": True, "ok": True,
+    }
+
+
+def test_codex_only_single_window_marks_weekly_absent(monkeypatch):
+    monkeypatch.setattr(mod, "read_codex_setting", lambda: "auto")
+    monkeypatch.setattr(mod, "read_codex_usage",
+                        lambda: {"xs": 9, "xsr": 120, "xwin": 300})
+    monkeypatch.setattr(mod, "read_clock_setting", lambda: "off")
+    monkeypatch.setattr(mod, "read_chime_setting", lambda: "off")
+
+    payload = mod.codex_only_payload()
+    assert payload["s"] == 9
+    assert payload["hw"] is False
+    assert payload["w"] == 0
 
 
 def test_poll_active_payload_selects_higher_util_plan(monkeypatch):

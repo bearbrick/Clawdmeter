@@ -696,6 +696,7 @@ def test_transient_poll_failure_does_not_set_error():
 
     with patch("daemon.claude_usage_daemon_windows.BleakClient", return_value=client), \
          patch("daemon.claude_usage_daemon_windows.read_token", return_value="tok"), \
+         patch("daemon.claude_usage_daemon_windows.read_codex_usage", return_value=None), \
          patch("daemon.claude_usage_daemon_windows.poll_api", new=fake_poll):
         _run(connect_and_run(device, stop_event, tray_state))
 
@@ -717,6 +718,7 @@ def test_auth_error_sets_token_expired():
 
     with patch("daemon.claude_usage_daemon_windows.BleakClient", return_value=client), \
          patch("daemon.claude_usage_daemon_windows.read_token", return_value="tok"), \
+         patch("daemon.claude_usage_daemon_windows.read_codex_usage", return_value=None), \
          patch("daemon.claude_usage_daemon_windows.poll_api", new=fake_poll):
         _run(connect_and_run(device, stop_event, tray_state))
 

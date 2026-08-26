@@ -233,6 +233,12 @@ Optional blocks are omitted rather than zeroed, so an older daemon and a newer o
 
 The Usage screen splits into a **Claude** panel and a **Codex** panel whenever the host has Codex usage to report. Each panel's big number is that provider's **shortest** window — the one that bites first — with a second window folded into the line underneath when there is one.
 
+Codex does not depend on Claude being signed in. If the Claude token is missing,
+expired, or temporarily unreachable, the daemon sends a standalone **Codex**
+view instead of putting the device on the no-data screen. With current Codex
+plans this normally shows the 5-hour window plus the weekly window; a plan that
+reports only one window shows just that panel.
+
 How many windows Codex reports depends on the plan and CLI version: some expose a 5-hour limit plus a weekly one, while ChatGPT Plus on Codex 0.147 reports only a weekly limit. A single-window plan gets that window as the headline, labelled `Week resets 6d 2h` so it can't be mistaken for a 5-hour figure.
 
 Codex costs no API call at all. The Codex CLI already records a rate-limit snapshot in its own session rollouts, so the daemon reads the newest one back:

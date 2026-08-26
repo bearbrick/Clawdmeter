@@ -87,6 +87,7 @@ def test_freeride_autherror_emits_no_data_beat():
         client.write_gatt_char = AsyncMock(side_effect=cap_write)
         with patch.object(mod, "BleakClient", return_value=client), \
              patch.object(mod, "read_token", return_value="EXPIRED"), \
+             patch.object(mod, "read_codex_usage", return_value=None), \
              patch.object(mod, "poll_api", new=fake_poll):
             await mod.connect_and_run(device, stop_event)
 

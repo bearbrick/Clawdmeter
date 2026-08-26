@@ -120,6 +120,10 @@ static bool parse_json(const char* json, UsageData* out) {
     out->clock_epoch = doc["t"] | 0L;
     out->clock_fmt = doc["tf"] | 24;
     out->ok = doc["ok"] | false;
+    const char* source = doc["src"] | "claude";
+    out->codex_only = (strcmp(source, "codex") == 0);
+    out->primary_window_mins = doc["win"] | 300;
+    out->has_weekly = doc["hw"] | true;
 
     // Codex block ("x" prefix). Absent on a Claude-only host and from older
     // daemons, so presence of the 5h key is what enables the split view — a

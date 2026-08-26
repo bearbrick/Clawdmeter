@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from daemon.claude_usage_daemon_windows import AuthError, poll_api
+from daemon.claude_usage_daemon_windows import AuthError, codex_only_payload, poll_api
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,23 @@ def _run(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
+
+
+def test_codex_only_payload_maps_five_hour_and_weekly_windows():
+    """Windows can emit Codex even when there is no Claude API response."""
+    usage = {"xs": 4, "xsr": 298, "xwin": 300,
+             "xw": 16, "xwr": 9433, "xacct": "plus"}
+    with patch("daemon.claude_usage_daemon_windows.read_codex_setting", return_value="auto"), \
+         patch("daemon.claude_usage_daemon_windows.read_codex_usage", return_value=usage), \
+         patch("daemon.claude_usage_daemon_windows.read_clock_setting", return_value="off"), \
+         patch("daemon.claude_usage_daemon_windows.read_chime_setting", return_value="off"):
+        payload = codex_only_payload()
+
+    assert payload == {
+        "s": 4, "sr": 298, "w": 16, "wr": 9433,
+        "st": "allowed", "acct": "codex", "src": "codex",
+        "win": 300, "hw": True, "ok": True,
+    }
 
 
 # ---------------------------------------------------------------------------

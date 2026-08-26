@@ -661,7 +661,7 @@ void ui_update(const UsageData* data) {
     // Split view: the second panel becomes Codex instead of Claude's weekly
     // window. Enterprise keeps priority — its Spending/Period pair already uses
     // both panels for one account, and there is no third panel to give Codex.
-    bool split = data->codex_valid && !data->enterprise;
+    bool split = data->codex_valid && !data->enterprise && !data->codex_only;
 
     if (data->enterprise) {
         // Spending box: big number-only label + small "%" symbol + desc + pace
@@ -674,12 +674,24 @@ void ui_update(const UsageData* data) {
         if (panel_weekly) lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_style_text_font(lbl_session_pct, L.pct_font, 0);
-        lv_label_set_text(lbl_session_label, split ? "Claude" : "Current");
+        const char* primary_label = split ? "Claude" : "Current";
+        if (data->codex_only) {
+            primary_label = data->primary_window_mins == 300 ? "Codex 5h" :
+                            data->primary_window_mins >= WINDOW_WEEKLY_MINS ? "Codex Week" :
+                            "Codex";
+        }
+        lv_label_set_text(lbl_session_label, primary_label);
         lv_obj_clear_flag(lbl_session_reset, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_session_pct_sym, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_spending_desc,   LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(lbl_spending_status, LV_OBJ_FLAG_HIDDEN);
-        if (panel_weekly) lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
+        if (panel_weekly) {
+            if (data->codex_only && !data->has_weekly) {
+                lv_obj_add_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_clear_flag(panel_weekly, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 
     char buf[48];
